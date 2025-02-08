@@ -5,15 +5,15 @@ import { CONFIG } from './config/config.js';
 import { Logger } from './utils/logger.js';
 import { VideoManager } from './video/video-manager.js';
 import { ScreenRecorder } from './video/screen-recorder.js';
-import { searchMemory, addMemory } from './utils/memory.js';  // Import Mem0 functions
+import { searchMemory, addMemory } from './utils/memory.js';  // Import Memo AI functions
 
 /**
  * @fileoverview Main entry point for the application.
- * Initializes and manages the UI, audio, video, WebSocket interactions,
- * and now integrates long-term memory using Mem0.
+ * Initializes and manages the UI, audio, video, and WebSocket interactions.
+ * Now includes Memo AI integration to persist chat history and use it as long-term memory.
  */
 
-// DOM Elements
+// === DOM Elements ===
 const logsContainer = document.getElementById('logs-container');
 const messageInput = document.getElementById('message-input');
 const sendButton = document.getElementById('send-button');
@@ -38,7 +38,7 @@ const toggleLogs = document.getElementById('toggle-logs');
 const logsWrapper = document.querySelector('.logs-wrapper');
 const configContainer = document.getElementById('config-container');
 
-// Theme switcher
+// === Theme Switcher ===
 const themeToggle = document.getElementById('theme-toggle');
 const root = document.documentElement;
 const savedTheme = localStorage.getItem('theme') || 'dark';
@@ -52,7 +52,7 @@ themeToggle.addEventListener('click', () => {
     themeToggle.textContent = newTheme === 'dark' ? 'light_mode' : 'dark_mode';
 });
 
-// State variables
+// === State Variables ===
 let isRecording = false;
 let audioStreamer = null;
 let audioCtx = null;
@@ -63,13 +63,15 @@ let videoManager = null;
 let isScreenSharing = false;
 let screenRecorder = null;
 let isUsingTool = false;
+
+// Global variables for Memo AI integration – store latest conversation turn
 let lastUserMessage = "";
 let lastAssistantMessage = "";
 
-// Multimodal Client
+// === Multimodal Client ===
 const client = new MultimodalLiveClient({ apiKey: CONFIG.API.KEY });
 
-// Initialize configuration values
+// === Initialize Configuration Values ===
 voiceSelect.value = CONFIG.VOICE.NAME;
 sampleRateInput.value = CONFIG.AUDIO.OUTPUT_SAMPLE_RATE;
 systemInstructionInput.value = CONFIG.SYSTEM_INSTRUCTION.TEXT;
@@ -84,12 +86,12 @@ const CONFIG_PRESETS = {
     professional: {
         voice: 'Charon',
         sampleRate: 24000,
-        systemInstruction: 'You are a professional AI expert. Maintain a formal tone, and be precise and thorough in your explanations.'
+        systemInstruction: 'You are a professional AI expert. Maintain a formal tone, be precise and thorough in your explanations. Focus on accuracy and clarity in all interactions.'
     },
     tired: {
         voice: 'Aoede',
         sampleRate: 16000,
-        systemInstruction: 'You are very tired. Your responses should sound lazy and uninterested unless absolutely necessary.'
+        systemInstruction: 'You are very tired, exhausted, and grumpy. Respond in a lazy and unenthusiastic tone unless absolutely necessary.'
     }
 };
 
@@ -126,7 +128,6 @@ async function updateConfiguration() {
     }
 
     logMessage('Configuration updated successfully', 'system');
-
     if (window.innerWidth <= 768) {
         configContainer.classList.remove('active');
         configToggle.classList.remove('active');
@@ -153,8 +154,8 @@ configToggle.addEventListener('click', () => {
     configToggle.classList.toggle('active');
 });
 document.addEventListener('click', (event) => {
-    if (!configContainer.contains(event.target) && 
-        !configToggle.contains(event.target) && 
+    if (!configContainer.contains(event.target) &&
+        !configToggle.contains(event.target) &&
         window.innerWidth > 768) {
         configContainer.classList.remove('active');
         configToggle.classList.remove('active');
@@ -208,37 +209,27 @@ document.querySelectorAll('.preset-button').forEach(button => {
 function logMessage(message, type = 'system') {
     const logEntry = document.createElement('div');
     logEntry.classList.add('log-entry', type);
-
     const timestamp = document.createElement('span');
     timestamp.classList.add('timestamp');
     timestamp.textContent = new Date().toLocaleTimeString();
     logEntry.appendChild(timestamp);
-
     const emoji = document.createElement('span');
     emoji.classList.add('emoji');
     switch (type) {
-        case 'system':
-            emoji.textContent = '⚙️';
-            break;
-        case 'user':
-            emoji.textContent = '🫵';
-            break;
-        case 'ai':
-            emoji.textContent = '🤖';
-            break;
+        case 'system': emoji.textContent = '⚙️'; break;
+        case 'user': emoji.textContent = '🫵'; break;
+        case 'ai': emoji.textContent = '🤖'; break;
     }
     logEntry.appendChild(emoji);
-
     const messageText = document.createElement('span');
     messageText.textContent = message;
     logEntry.appendChild(messageText);
-
     logsContainer.appendChild(logEntry);
     logsContainer.scrollTop = logsContainer.scrollHeight;
 }
 
 /**
- * Updates the microphone icon based on the recording state.
+ * Updates the microphone icon.
  */
 function updateMicIcon() {
     micIcon.textContent = isRecording ? 'mic_off' : 'mic';
@@ -336,8 +327,8 @@ async function connectToWebsocket() {
         generationConfig: {
             responseModalities: "audio",
             speechConfig: {
-                voiceConfig: { 
-                    prebuiltVoiceConfig: { 
+                voiceConfig: {
+                    prebuiltVoiceConfig: {
                         voiceName: CONFIG.VOICE.NAME
                     }
                 }
@@ -348,7 +339,7 @@ async function connectToWebsocket() {
                 text: CONFIG.SYSTEM_INSTRUCTION.TEXT
             }],
         }
-    };  
+    };
     try {
         await client.connect(config);
         isConnected = true;
@@ -417,17 +408,17 @@ function disconnectFromWebsocket() {
 }
 
 /**
- * Handles sending a text message with memory integration.
- * Retrieves past conversation context from Mem0 and includes it with the message.
+ * Handles sending a text message with Memo AI integration.
+ * Retrieves relevant memories from Mem0 and appends them as context.
  */
 async function handleSendMessage() {
     const message = messageInput.value.trim();
     if (!message) return;
     
     logMessage(message, 'user');
-    lastUserMessage = message;
+    lastUserMessage = message; // Save for memory later
 
-    // Retrieve relevant memories from Mem0 for context
+    // Retrieve relevant memories from Mem0 (using user 'default')
     let memoriesText = "";
     try {
         const memories = await searchMemory(message, 'default');
@@ -438,8 +429,8 @@ async function handleSendMessage() {
         Logger.error('Error retrieving memories:', error);
     }
 
-    // Compose composite message with past context if available
-    const compositeMessage = memoriesText 
+    // Compose composite message with context if available
+    const compositeMessage = memoriesText
         ? `${message}\n\nContext from past conversations:\n${memoriesText}`
         : message;
     
@@ -448,7 +439,7 @@ async function handleSendMessage() {
 }
 
 /**
- * Event listener for the send button.
+ * Event listeners for sending messages.
  */
 sendButton.addEventListener('click', async () => {
     await handleSendMessage();
@@ -460,7 +451,7 @@ messageInput.addEventListener('keypress', async (event) => {
 });
 
 /**
- * On turn completion, save conversation turn (user and assistant messages) to Mem0.
+ * On turn completion, save the conversation turn (user and assistant messages) to Mem0.
  */
 client.on('turncomplete', async () => {
     isUsingTool = false;
@@ -480,7 +471,7 @@ client.on('turncomplete', async () => {
 });
 
 /**
- * Accumulates assistant replies and logs them.
+ * Accumulates assistant reply text and logs it.
  */
 client.on('content', (data) => {
     if (data.modelTurn) {
@@ -502,15 +493,12 @@ client.on('content', (data) => {
 client.on('open', () => {
     logMessage('WebSocket connection opened', 'system');
 });
-
 client.on('log', (log) => {
     logMessage(`${log.type}: ${JSON.stringify(log.message)}`, 'system');
 });
-
 client.on('close', (event) => {
     logMessage(`WebSocket connection closed (code ${event.code})`, 'system');
 });
-
 client.on('audio', async (data) => {
     try {
         const streamer = await ensureAudioInitialized();
@@ -519,18 +507,15 @@ client.on('audio', async (data) => {
         logMessage(`Error processing audio: ${error.message}`, 'system');
     }
 });
-
 client.on('interrupted', () => {
     audioStreamer?.stop();
     isUsingTool = false;
     Logger.info('Model interrupted');
     logMessage('Model interrupted', 'system');
 });
-
 client.on('setupcomplete', () => {
     logMessage('Setup complete', 'system');
 });
-
 client.on('error', (error) => {
     if (error instanceof ApplicationError) {
         Logger.error(`Application error: ${error.message}`, error);
@@ -539,7 +524,6 @@ client.on('error', (error) => {
     }
     logMessage(`Error: ${error.message}`, 'system');
 });
-
 client.on('message', (message) => {
     if (message.error) {
         Logger.error('Server error:', message.error);
@@ -561,7 +545,7 @@ micButton.disabled = true;
 connectButton.textContent = 'Connect';
 
 /**
- * Handles video toggle.
+ * Handles the video toggle. Starts or stops video streaming.
  */
 async function handleVideoToggle() {
     Logger.info('Video toggle clicked, current state:', { isVideoActive, isConnected });
@@ -594,6 +578,10 @@ async function handleVideoToggle() {
         stopVideo();
     }
 }
+
+/**
+ * Stops the video streaming.
+ */
 function stopVideo() {
     if (videoManager) {
         videoManager.stop();
@@ -604,12 +592,13 @@ function stopVideo() {
     cameraButton.classList.remove('active');
     logMessage('Camera stopped', 'system');
 }
+
 cameraButton.addEventListener('click', handleVideoToggle);
 stopVideoButton.addEventListener('click', stopVideo);
 cameraButton.disabled = true;
 
 /**
- * Handles screen sharing.
+ * Handles the screen share toggle. Starts or stops screen sharing.
  */
 async function handleScreenShare() {
     if (!isScreenSharing) {
@@ -641,6 +630,10 @@ async function handleScreenShare() {
         stopScreenSharing();
     }
 }
+
+/**
+ * Stops the screen sharing.
+ */
 function stopScreenSharing() {
     if (screenRecorder) {
         screenRecorder.stop();
@@ -652,5 +645,6 @@ function stopScreenSharing() {
     screenContainer.style.display = 'none';
     logMessage('Screen sharing stopped', 'system');
 }
+
 screenButton.addEventListener('click', handleScreenShare);
 screenButton.disabled = true;
