@@ -1,5 +1,3 @@
-Test=
-
 import { MultimodalLiveClient } from './core/websocket-client.js';
 import { AudioStreamer } from './audio/audio-streamer.js';
 import { AudioRecorder } from './audio/audio-recorder.js';
@@ -7,10 +5,11 @@ import { CONFIG } from './config/config.js';
 import { Logger } from './utils/logger.js';
 import { VideoManager } from './video/video-manager.js';
 import { ScreenRecorder } from './video/screen-recorder.js';
+import { searchMemory, addMemory } from './utils/memory.js';  // <-- Import memory functions
 
 /**
  * @fileoverview Main entry point for the application.
- * Initializes and manages the UI, audio, video, and WebSocket interactions.
+ * Initializes and manages the UI, audio, video, WebSocket interactions, and now long-term memory.
  */
 
 // DOM Elements
@@ -66,6 +65,10 @@ let isScreenSharing = false;
 let screenRecorder = null;
 let isUsingTool = false;
 
+// Global variables to store the current conversation turn for memory
+let lastUserMessage = "";
+let lastAssistantMessage = "";
+
 // Multimodal Client
 const client = new MultimodalLiveClient({ apiKey: CONFIG.API.KEY });
 
@@ -89,12 +92,12 @@ const CONFIG_PRESETS = {
     tired: {
         voice: 'Aoede',
         sampleRate: 16000,      // Voice is very tired and low pitch
-        systemInstruction: 'You are very tired, exhausted, boring man. You are tired working on your very hard, low pay work. So your first response should be something very lazy, like "Hello... whats up???", or "what is it now, huh?... please, can I go sleep already???", etc. (not exactly as those, but keeping the tone of a tired person) If someone asks you if you are tired, say yes and tell a story how bad and tiring you day was. (It should be something creative, not just "coffee machine" cliche. Always say something creative) Then, if the user feels sorry, continue rambling about your life, how unfair it is, how you want to leave your country, etc. If the user asks you to do something, then pretend to be very lazy and not wanting to do that, asking like "do you really need that now? I am so tired", "Is this urgent, maybe we just drink a tea?" (not exactly as those but keeping the tone of a tired man". If the user confirms that it is needed, then do the task in a very unwanted tone, like "Fiiine!!! I will do it" or similar. Keep the tone and be in role.'
+        systemInstruction: 'You are very tired, exhausted, boring man. Your responses should sound lazy and uninterested unless absolutely necessary.'
     }
 };
 
 /**
- * Updates the configuration and reconnects if connected
+ * Updates the configuration and reconnects if connected.
  */
 async function updateConfiguration() {
     const newVoice = voiceSelect.value;
@@ -157,7 +160,6 @@ if (localStorage.getItem('gemini_system_instruction')) {
 
 // Add event listener for configuration changes
 applyConfigButton.addEventListener('click', updateConfiguration);
-
 
 // Handle configuration panel toggle
 configToggle.addEventListener('click', () => {
@@ -392,11 +394,10 @@ async function connectToWebsocket() {
                     }
                 }
             },
-
         },
         systemInstruction: {
             parts: [{
-                text: CONFIG.SYSTEM_INSTRUCTION.TEXT     // You can change system instruction in the config.js file
+                text: CONFIG.SYSTEM_INSTRUCTION.TEXT     // System instruction from config
             }],
         }
     };  
@@ -474,18 +475,98 @@ function disconnectFromWebsocket() {
 }
 
 /**
- * Handles sending a text message.
+ * Handles sending a text message with memory integration.
+ * Retrieves relevant memories from Mem0 and appends them as context,
+ * then sends the composite message to Gemini.
  */
-function handleSendMessage() {
+async function handleSendMessage() {
     const message = messageInput.value.trim();
-    if (message) {
-        logMessage(message, 'user');
-        client.send({ text: message });
-        messageInput.value = '';
+    if (!message) return;
+    
+    // Log user message
+    logMessage(message, 'user');
+    lastUserMessage = message;  // Save the user message for memory storage later
+
+    // Retrieve memories for context from Mem0 (using userId 'default')
+    let memoriesText = "";
+    try {
+        const memories = await searchMemory(message, 'default');
+        if (memories && memories.length > 0) {
+            memoriesText = memories.map(entry => entry.memory || entry.text || "").join("\n");
+        }
+    } catch (error) {
+        Logger.error('Error retrieving memories:', error);
     }
+
+    // Compose a composite message including context from memories if available
+    const compositeMessage = memoriesText 
+        ? `${message}\n\nContext from past conversations:\n${memoriesText}`
+        : message;
+    
+    // Send composite message to Gemini
+    client.send({ text: compositeMessage });
+    messageInput.value = '';
 }
 
-// Event Listeners
+/**
+ * Event listener for the send button.
+ */
+sendButton.addEventListener('click', async () => {
+    await handleSendMessage();
+});
+
+messageInput.addEventListener('keypress', async (event) => {
+    if (event.key === 'Enter') {
+        await handleSendMessage();
+    }
+});
+
+/**
+ * Updates conversation memory upon turn completion.
+ * When a turn is complete, saves the user message and assistant reply to Mem0.
+ */
+client.on('turncomplete', async () => {
+    isUsingTool = false;
+    logMessage('Turn complete', 'system');
+    
+    // If we have stored both user and assistant messages, save them to memory
+    if (lastUserMessage && lastAssistantMessage) {
+        try {
+            await addMemory('default', [
+                { role: 'user', content: lastUserMessage },
+                { role: 'assistant', content: lastAssistantMessage }
+            ]);
+            // Clear stored turn messages after saving
+            lastUserMessage = "";
+            lastAssistantMessage = "";
+        } catch (error) {
+            Logger.error('Error saving conversation to memory:', error);
+        }
+    }
+});
+
+/**
+ * Handles incoming assistant messages.
+ * Accumulates the assistant reply for saving to memory.
+ */
+client.on('content', (data) => {
+    if (data.modelTurn) {
+        if (data.modelTurn.parts.some(part => part.functionCall)) {
+            isUsingTool = true;
+            Logger.info('Model is using a tool');
+        } else if (data.modelTurn.parts.some(part => part.functionResponse)) {
+            isUsingTool = false;
+            Logger.info('Tool usage completed');
+        }
+        const text = data.modelTurn.parts.map(part => part.text).join('');
+        if (text) {
+            logMessage(text, 'ai');
+            // Append to assistant reply accumulator
+            lastAssistantMessage += text;
+        }
+    }
+});
+
 client.on('open', () => {
     logMessage('WebSocket connection opened', 'system');
 });
@@ -507,23 +588,6 @@ client.on('audio', async (data) => {
     }
 });
 
-client.on('content', (data) => {
-    if (data.modelTurn) {
-        if (data.modelTurn.parts.some(part => part.functionCall)) {
-            isUsingTool = true;
-            Logger.info('Model is using a tool');
-        } else if (data.modelTurn.parts.some(part => part.functionResponse)) {
-            isUsingTool = false;
-            Logger.info('Tool usage completed');
-        }
-
-        const text = data.modelTurn.parts.map(part => part.text).join('');
-        if (text) {
-            logMessage(text, 'ai');
-        }
-    }
-});
-
 client.on('interrupted', () => {
     audioStreamer?.stop();
     isUsingTool = false;
@@ -533,11 +597,6 @@ client.on('interrupted', () => {
 
 client.on('setupcomplete', () => {
     logMessage('Setup complete', 'system');
-});
-
-client.on('turncomplete', () => {
-    isUsingTool = false;
-    logMessage('Turn complete', 'system');
 });
 
 client.on('error', (error) => {
@@ -553,13 +612,6 @@ client.on('message', (message) => {
     if (message.error) {
         Logger.error('Server error:', message.error);
         logMessage(`Server error: ${message.error}`, 'system');
-    }
-});
-
-sendButton.addEventListener('click', handleSendMessage);
-messageInput.addEventListener('keypress', (event) => {
-    if (event.key === 'Enter') {
-        handleSendMessage();
     }
 });
 
@@ -692,4 +744,3 @@ function stopScreenSharing() {
 
 screenButton.addEventListener('click', handleScreenShare);
 screenButton.disabled = true;
-  
