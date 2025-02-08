@@ -5,11 +5,12 @@ import { CONFIG } from './config/config.js';
 import { Logger } from './utils/logger.js';
 import { VideoManager } from './video/video-manager.js';
 import { ScreenRecorder } from './video/screen-recorder.js';
-import { searchMemory, addMemory } from './utils/memory.js';  // <-- Import memory functions
+import { searchMemory, addMemory } from './utils/memory.js';  // Import Mem0 functions
 
 /**
  * @fileoverview Main entry point for the application.
- * Initializes and manages the UI, audio, video, WebSocket interactions, and now long-term memory.
+ * Initializes and manages the UI, audio, video, WebSocket interactions,
+ * and now integrates long-term memory using Mem0.
  */
 
 // DOM Elements
@@ -40,14 +41,12 @@ const configContainer = document.getElementById('config-container');
 // Theme switcher
 const themeToggle = document.getElementById('theme-toggle');
 const root = document.documentElement;
-// Set initial theme from localStorage or default to dark
 const savedTheme = localStorage.getItem('theme') || 'dark';
 root.setAttribute('data-theme', savedTheme);
 themeToggle.textContent = savedTheme === 'dark' ? 'light_mode' : 'dark_mode';
 themeToggle.addEventListener('click', () => {
     const currentTheme = root.getAttribute('data-theme');
     const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-    
     root.setAttribute('data-theme', newTheme);
     localStorage.setItem('theme', newTheme);
     themeToggle.textContent = newTheme === 'dark' ? 'light_mode' : 'dark_mode';
@@ -64,8 +63,6 @@ let videoManager = null;
 let isScreenSharing = false;
 let screenRecorder = null;
 let isUsingTool = false;
-
-// Global variables to store the current conversation turn for memory
 let lastUserMessage = "";
 let lastAssistantMessage = "";
 
@@ -82,51 +79,46 @@ const CONFIG_PRESETS = {
     friendly: {
         voice: 'Aoede',
         sampleRate: 27000,
-        systemInstruction: 'You are a friendly and warm AI assistant. Use a casual, approachable tone and be encouraging. Feel free to express enthusiasm when helping users.'
+        systemInstruction: 'You are a friendly and warm AI assistant. Use a casual, approachable tone and be encouraging.'
     },
     professional: {
         voice: 'Charon',
         sampleRate: 24000,
-        systemInstruction: 'You are a professional AI expert. Maintain a formal tone, be precise and thorough in your explanations. Focus on accuracy and clarity in all interactions.'
+        systemInstruction: 'You are a professional AI expert. Maintain a formal tone, and be precise and thorough in your explanations.'
     },
     tired: {
         voice: 'Aoede',
-        sampleRate: 16000,      // Voice is very tired and low pitch
-        systemInstruction: 'You are very tired, exhausted, boring man. Your responses should sound lazy and uninterested unless absolutely necessary.'
+        sampleRate: 16000,
+        systemInstruction: 'You are very tired. Your responses should sound lazy and uninterested unless absolutely necessary.'
     }
 };
 
 /**
- * Updates the configuration and reconnects if connected.
+ * Updates the configuration and reconnects if needed.
  */
 async function updateConfiguration() {
     const newVoice = voiceSelect.value;
     const newSampleRate = parseInt(sampleRateInput.value);
     const newInstruction = systemInstructionInput.value.trim();
 
-    // Validate sample rate
     if (isNaN(newSampleRate) || newSampleRate < 1000 || newSampleRate > 48000) {
         logMessage('Invalid sample rate. Must be between 1000 and 48000 Hz.', 'system');
         return;
     }
 
-    // Update configuration
     CONFIG.VOICE.NAME = newVoice;
     CONFIG.AUDIO.OUTPUT_SAMPLE_RATE = newSampleRate;
     CONFIG.SYSTEM_INSTRUCTION.TEXT = newInstruction;
 
-    // Save to localStorage
     localStorage.setItem('gemini_voice', newVoice);
     localStorage.setItem('gemini_output_sample_rate', newSampleRate.toString());
     localStorage.setItem('gemini_system_instruction', newInstruction);
 
-    // If we have an active audio streamer, stop it
     if (audioStreamer) {
         audioStreamer.stop();
         audioStreamer = null;
     }
 
-    // If connected, reconnect to apply changes
     if (isConnected) {
         logMessage('Reconnecting to apply configuration changes...', 'system');
         await disconnectFromWebsocket();
@@ -134,8 +126,7 @@ async function updateConfiguration() {
     }
 
     logMessage('Configuration updated successfully', 'system');
-    
-    // Close the config panel on mobile after applying settings
+
     if (window.innerWidth <= 768) {
         configContainer.classList.remove('active');
         configToggle.classList.remove('active');
@@ -147,27 +138,20 @@ if (localStorage.getItem('gemini_voice')) {
     CONFIG.VOICE.NAME = localStorage.getItem('gemini_voice');
     voiceSelect.value = CONFIG.VOICE.NAME;
 }
-
 if (localStorage.getItem('gemini_output_sample_rate')) {
     CONFIG.AUDIO.OUTPUT_SAMPLE_RATE = parseInt(localStorage.getItem('gemini_output_sample_rate'));
     sampleRateInput.value = CONFIG.AUDIO.OUTPUT_SAMPLE_RATE;
 }
-
 if (localStorage.getItem('gemini_system_instruction')) {
     CONFIG.SYSTEM_INSTRUCTION.TEXT = localStorage.getItem('gemini_system_instruction');
     systemInstructionInput.value = CONFIG.SYSTEM_INSTRUCTION.TEXT;
 }
 
-// Add event listener for configuration changes
 applyConfigButton.addEventListener('click', updateConfiguration);
-
-// Handle configuration panel toggle
 configToggle.addEventListener('click', () => {
     configContainer.classList.toggle('active');
     configToggle.classList.toggle('active');
 });
-
-// Close config panel when clicking outside (for desktop)
 document.addEventListener('click', (event) => {
     if (!configContainer.contains(event.target) && 
         !configToggle.contains(event.target) && 
@@ -176,27 +160,19 @@ document.addEventListener('click', (event) => {
         configToggle.classList.remove('active');
     }
 });
-
-// Prevent clicks inside config panel from closing it
 configContainer.addEventListener('click', (event) => {
     event.stopPropagation();
 });
-
-// Close config panel on escape key
 document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
         configContainer.classList.remove('active');
         configToggle.classList.remove('active');
     }
 });
-
-// Handle logs collapse/expand
 toggleLogs.addEventListener('click', () => {
     logsWrapper.classList.toggle('collapsed');
     toggleLogs.textContent = logsWrapper.classList.contains('collapsed') ? 'expand_more' : 'expand_less';
 });
-
-// Collapse logs by default on mobile
 function handleMobileView() {
     if (window.innerWidth <= 768) {
         logsWrapper.classList.add('collapsed');
@@ -206,14 +182,8 @@ function handleMobileView() {
         toggleLogs.textContent = 'expand_less';
     }
 }
-
-// Listen for window resize
 window.addEventListener('resize', handleMobileView);
-
-// Initial check
 handleMobileView();
-
-// Handle preset button clicks
 document.querySelectorAll('.preset-button').forEach(button => {
     button.addEventListener('click', () => {
         const preset = CONFIG_PRESETS[button.dataset.preset];
@@ -221,11 +191,7 @@ document.querySelectorAll('.preset-button').forEach(button => {
             voiceSelect.value = preset.voice;
             sampleRateInput.value = preset.sampleRate;
             systemInstructionInput.value = preset.systemInstruction;
-            
-            // Apply the configuration immediately
             updateConfiguration();
-            
-            // Visual feedback
             button.style.backgroundColor = 'var(--primary-color)';
             button.style.color = 'white';
             setTimeout(() => {
@@ -238,8 +204,6 @@ document.querySelectorAll('.preset-button').forEach(button => {
 
 /**
  * Logs a message to the UI.
- * @param {string} message - The message to log.
- * @param {string} [type='system'] - The type of the message (system, user, ai).
  */
 function logMessage(message, type = 'system') {
     const logEntry = document.createElement('div');
@@ -282,30 +246,21 @@ function updateMicIcon() {
 }
 
 /**
- * Updates the audio visualizer based on the audio volume.
- * @param {number} volume - The audio volume (0.0 to 1.0).
- * @param {boolean} [isInput=false] - Whether the visualizer is for input audio.
+ * Updates the audio visualizer.
  */
 function updateAudioVisualizer(volume, isInput = false) {
     const visualizer = isInput ? inputAudioVisualizer : audioVisualizer;
     const audioBar = visualizer.querySelector('.audio-bar') || document.createElement('div');
-    
     if (!visualizer.contains(audioBar)) {
         audioBar.classList.add('audio-bar');
         visualizer.appendChild(audioBar);
     }
-    
     audioBar.style.width = `${volume * 100}%`;
-    if (volume > 0) {
-        audioBar.classList.add('active');
-    } else {
-        audioBar.classList.remove('active');
-    }
+    volume > 0 ? audioBar.classList.add('active') : audioBar.classList.remove('active');
 }
 
 /**
- * Initializes the audio context and streamer if not already initialized.
- * @returns {Promise<AudioStreamer>} The audio streamer instance.
+ * Initializes the audio context and streamer.
  */
 async function ensureAudioInitialized() {
     if (!audioCtx) {
@@ -320,25 +275,22 @@ async function ensureAudioInitialized() {
 }
 
 /**
- * Handles the microphone toggle. Starts or stops audio recording.
- * @returns {Promise<void>}
+ * Handles the microphone toggle.
  */
 async function handleMicToggle() {
     if (!isRecording) {
         try {
             await ensureAudioInitialized();
             audioRecorder = new AudioRecorder();
-            
             const inputAnalyser = audioCtx.createAnalyser();
             inputAnalyser.fftSize = 256;
             const inputDataArray = new Uint8Array(inputAnalyser.frequencyBinCount);
-            
             await audioRecorder.start((base64Data) => {
                 if (isUsingTool) {
                     client.sendRealtimeInput([{
                         mimeType: "audio/pcm;rate=16000",
                         data: base64Data,
-                        interrupt: true     // Model isn't interruptable when using tools, so we do it manually
+                        interrupt: true
                     }]);
                 } else {
                     client.sendRealtimeInput([{
@@ -346,16 +298,13 @@ async function handleMicToggle() {
                         data: base64Data
                     }]);
                 }
-                
                 inputAnalyser.getByteFrequencyData(inputDataArray);
                 const inputVolume = Math.max(...inputDataArray) / 255;
                 updateAudioVisualizer(inputVolume, true);
             });
-
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             const source = audioCtx.createMediaStreamSource(stream);
             source.connect(inputAnalyser);
-            
             await audioStreamer.resume();
             isRecording = true;
             Logger.info('Microphone started');
@@ -380,7 +329,6 @@ async function handleMicToggle() {
 
 /**
  * Connects to the WebSocket server.
- * @returns {Promise<void>}
  */
 async function connectToWebsocket() {
     const config = {
@@ -390,18 +338,17 @@ async function connectToWebsocket() {
             speechConfig: {
                 voiceConfig: { 
                     prebuiltVoiceConfig: { 
-                        voiceName: CONFIG.VOICE.NAME    // You can change voice in the config.js file
+                        voiceName: CONFIG.VOICE.NAME
                     }
                 }
             },
         },
         systemInstruction: {
             parts: [{
-                text: CONFIG.SYSTEM_INSTRUCTION.TEXT     // System instruction from config
+                text: CONFIG.SYSTEM_INSTRUCTION.TEXT
             }],
         }
     };  
-
     try {
         await client.connect(config);
         isConnected = true;
@@ -413,8 +360,6 @@ async function connectToWebsocket() {
         cameraButton.disabled = false;
         screenButton.disabled = false;
         logMessage('Connected to Gemini 2.0 Flash Multimodal Live API', 'system');
-
-        // Add click handler to initialize audio on first interaction
         const initAudioHandler = async () => {
             try {
                 await ensureAudioInitialized();
@@ -425,7 +370,6 @@ async function connectToWebsocket() {
         };
         document.addEventListener('click', initAudioHandler);
         logMessage('Audio initialized', 'system');
-        
     } catch (error) {
         const errorMessage = error.message || 'Unknown error';
         Logger.error('Connection error:', error);
@@ -464,11 +408,9 @@ function disconnectFromWebsocket() {
     cameraButton.disabled = true;
     screenButton.disabled = true;
     logMessage('Disconnected from server', 'system');
-    
     if (videoManager) {
         stopVideo();
     }
-    
     if (screenRecorder) {
         stopScreenSharing();
     }
@@ -476,18 +418,16 @@ function disconnectFromWebsocket() {
 
 /**
  * Handles sending a text message with memory integration.
- * Retrieves relevant memories from Mem0 and appends them as context,
- * then sends the composite message to Gemini.
+ * Retrieves past conversation context from Mem0 and includes it with the message.
  */
 async function handleSendMessage() {
     const message = messageInput.value.trim();
     if (!message) return;
     
-    // Log user message
     logMessage(message, 'user');
-    lastUserMessage = message;  // Save the user message for memory storage later
+    lastUserMessage = message;
 
-    // Retrieve memories for context from Mem0 (using userId 'default')
+    // Retrieve relevant memories from Mem0 for context
     let memoriesText = "";
     try {
         const memories = await searchMemory(message, 'default');
@@ -498,12 +438,11 @@ async function handleSendMessage() {
         Logger.error('Error retrieving memories:', error);
     }
 
-    // Compose a composite message including context from memories if available
+    // Compose composite message with past context if available
     const compositeMessage = memoriesText 
         ? `${message}\n\nContext from past conversations:\n${memoriesText}`
         : message;
     
-    // Send composite message to Gemini
     client.send({ text: compositeMessage });
     messageInput.value = '';
 }
@@ -514,7 +453,6 @@ async function handleSendMessage() {
 sendButton.addEventListener('click', async () => {
     await handleSendMessage();
 });
-
 messageInput.addEventListener('keypress', async (event) => {
     if (event.key === 'Enter') {
         await handleSendMessage();
@@ -522,21 +460,17 @@ messageInput.addEventListener('keypress', async (event) => {
 });
 
 /**
- * Updates conversation memory upon turn completion.
- * When a turn is complete, saves the user message and assistant reply to Mem0.
+ * On turn completion, save conversation turn (user and assistant messages) to Mem0.
  */
 client.on('turncomplete', async () => {
     isUsingTool = false;
     logMessage('Turn complete', 'system');
-    
-    // If we have stored both user and assistant messages, save them to memory
     if (lastUserMessage && lastAssistantMessage) {
         try {
             await addMemory('default', [
                 { role: 'user', content: lastUserMessage },
                 { role: 'assistant', content: lastAssistantMessage }
             ]);
-            // Clear stored turn messages after saving
             lastUserMessage = "";
             lastAssistantMessage = "";
         } catch (error) {
@@ -546,8 +480,7 @@ client.on('turncomplete', async () => {
 });
 
 /**
- * Handles incoming assistant messages.
- * Accumulates the assistant reply for saving to memory.
+ * Accumulates assistant replies and logs them.
  */
 client.on('content', (data) => {
     if (data.modelTurn) {
@@ -561,7 +494,6 @@ client.on('content', (data) => {
         const text = data.modelTurn.parts.map(part => part.text).join('');
         if (text) {
             logMessage(text, 'ai');
-            // Append to assistant reply accumulator
             lastAssistantMessage += text;
         }
     }
@@ -616,7 +548,6 @@ client.on('message', (message) => {
 });
 
 micButton.addEventListener('click', handleMicToggle);
-
 connectButton.addEventListener('click', () => {
     if (isConnected) {
         disconnectFromWebsocket();
@@ -624,38 +555,32 @@ connectButton.addEventListener('click', () => {
         connectToWebsocket();
     }
 });
-
 messageInput.disabled = true;
 sendButton.disabled = true;
 micButton.disabled = true;
 connectButton.textContent = 'Connect';
 
 /**
- * Handles the video toggle. Starts or stops video streaming.
- * @returns {Promise<void>}
+ * Handles video toggle.
  */
 async function handleVideoToggle() {
     Logger.info('Video toggle clicked, current state:', { isVideoActive, isConnected });
-    
     if (!isVideoActive) {
         try {
             Logger.info('Attempting to start video');
             if (!videoManager) {
                 videoManager = new VideoManager();
             }
-            
             await videoManager.start((frameData) => {
                 if (isConnected) {
                     client.sendRealtimeInput([frameData]);
                 }
             });
-
             isVideoActive = true;
             cameraIcon.textContent = 'videocam_off';
             cameraButton.classList.add('active');
             Logger.info('Camera started successfully');
             logMessage('Camera started', 'system');
-
         } catch (error) {
             Logger.error('Camera error:', error);
             logMessage(`Error: ${error.message}`, 'system');
@@ -669,10 +594,6 @@ async function handleVideoToggle() {
         stopVideo();
     }
 }
-
-/**
- * Stops the video streaming.
- */
 function stopVideo() {
     if (videoManager) {
         videoManager.stop();
@@ -683,21 +604,17 @@ function stopVideo() {
     cameraButton.classList.remove('active');
     logMessage('Camera stopped', 'system');
 }
-
 cameraButton.addEventListener('click', handleVideoToggle);
 stopVideoButton.addEventListener('click', stopVideo);
-
 cameraButton.disabled = true;
 
 /**
- * Handles the screen share toggle. Starts or stops screen sharing.
- * @returns {Promise<void>}
+ * Handles screen sharing.
  */
 async function handleScreenShare() {
     if (!isScreenSharing) {
         try {
             screenContainer.style.display = 'block';
-            
             screenRecorder = new ScreenRecorder();
             await screenRecorder.start(screenPreview, (frameData) => {
                 if (isConnected) {
@@ -707,13 +624,11 @@ async function handleScreenShare() {
                     }]);
                 }
             });
-
             isScreenSharing = true;
             screenIcon.textContent = 'stop_screen_share';
             screenButton.classList.add('active');
             Logger.info('Screen sharing started');
             logMessage('Screen sharing started', 'system');
-
         } catch (error) {
             Logger.error('Screen sharing error:', error);
             logMessage(`Error: ${error.message}`, 'system');
@@ -726,10 +641,6 @@ async function handleScreenShare() {
         stopScreenSharing();
     }
 }
-
-/**
- * Stops the screen sharing.
- */
 function stopScreenSharing() {
     if (screenRecorder) {
         screenRecorder.stop();
@@ -741,6 +652,5 @@ function stopScreenSharing() {
     screenContainer.style.display = 'none';
     logMessage('Screen sharing stopped', 'system');
 }
-
 screenButton.addEventListener('click', handleScreenShare);
 screenButton.disabled = true;
